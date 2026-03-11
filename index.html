@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Particle Core - Halo Winda (Fokus)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        #ui-layer {
+            position: absolute; top: 30px; left: 30px; color: white;
+            pointer-events: none; z-index: 10;
+        }
+        h1 { margin: 0; font-size: 20px; letter-spacing: 4px; color: #ff0077; text-transform: uppercase; opacity: 0.8; }
+        #gesture-status { font-size: 32px; font-weight: 900; margin: 5px 0; color: #fff; text-shadow: 0 0 20px #ff0077; }
+        .controls { font-size: 13px; color: #aaa; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border-left: 3px solid #ff0077; backdrop-filter: blur(10px); }
+        #cam-container {
+            position: absolute; bottom: 25px; right: 25px;
+            width: 190px; height: 140px; border: 2px solid #333;
+            border-radius: 12px; overflow: hidden; transform: scaleX(-1);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        #hint { position: absolute; bottom: 20px; left: 30px; color: #444; font-size: 11px; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>Interactive AI Particle Core</h1>
+        <div id="gesture-status">MENGHUBUNGKAN KAMERA...</div>
+        <div class="controls">
+            ✋ <b>Open:</b> Chaos | ✊ <b>Fist:</b> Gravity<br>
+            ✌️ <b>Victory:</b> Heart | 👍 <b>Thumb:</b> Sphere<br>
+            🤟 <b>Rock On:</b> <span style="color:#ff0077">HALO WINDA (FOKUS)</span>
+        </div>
+    </div>
+
+    <div id="hint">Klik layar untuk aktifkan suara • Pastikan ruangan terang</div>
+
+    <div id="cam-container">
+        <video id="input_video"></video>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+        // --- AUDIO ENGINE ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let osc = null, gain = null;
+        function playSfx(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (osc) { osc.stop(); osc.disconnect(); }
+            osc = audioCtx.createOscillator(); gain = audioCtx.createGain();
+            const config = {
+                'HEART': { f: 440, t: 'sine' }, 'SPHERE': { f: 330, t: 'triangle' },
+                'WINDA': { f: 554, t: 'sawtooth' }, 'FIST': { f: 120, t: 'sine' },
+                'OPEN': { f: 780, t: 'square' }
+            }[type] || { f: 200, t: 'sine' };
+            osc.type = config.t; osc.frequency.setValueAtTime(config.f, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 1);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 1);
+        }
+
+        // --- THREE.JS SCENE ---
+        const particleCount = 20000;
+        let currentGesture = 'IDLE', lastGesture = 'IDLE';
+        const handPos = new THREE.Vector3(0, 0, 0);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+        camera.position.z = 6;
+
+        const geo = new THREE.BufferGeometry();
+        const posArr = new Float32Array(particleCount * 3);
+        const colArr = new Float32Array(particleCount * 3);
+        const color = new THREE.Color();
+
+        for (let i = 0; i < particleCount; i++) {
+            posArr[i*3] = (Math.random() - 0.5) * 20;
+            posArr[i*3+1] = (Math.random() - 0.5) * 20;
+            posArr[i*3+2] = (Math.random() - 0.5) * 10;
+            // Warna nuansa Pink/Magenta yang tajam
+            color.setHSL(0.85 + (Math.random()*0.1), 0.9, 0.6);
+            colArr[i*3] = color.r; colArr[i*3+1] = color.g; colArr[i*3+2] = color.b;
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+
+        // Partikel yang lebih besar agar terlihat padat
+        const mat = new THREE.PointsMaterial({ size: 0.05, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9 });
+        const points = new THREE.Points(geo, mat);
+        scene.add(points);
+
+        // --- SHAPE TARGETS (PERBAIKAN FOKUS WINDA) ---
+        const heartTargets = new Float32Array(particleCount * 3);
+        const sphereTargets = new Float32Array(particleCount * 3);
+        let textTargets = null;
+
+        for(let i=0; i<particleCount; i++) {
+            const t = Math.random() * Math.PI * 2;
+            heartTargets[i*3] = (16 * Math.pow(Math.sin(t), 3)) / 8;
+            heartTargets[i*3+1] = (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) / 8;
+            
+            const phi = Math.acos(-1 + (2 * i) / particleCount);
+            const theta = Math.sqrt(particleCount * Math.PI) * phi;
+            sphereTargets[i*3] = 3 * Math.cos(theta) * Math.sin(phi);
+            sphereTargets[i*3+1] = 3 * Math.sin(theta) * Math.sin(phi);
+            sphereTargets[i*3+2] = 3 * Math.cos(phi);
+        }
+
+        const loader = new FontLoader();
+        loader.load('https://threejs.org/examples/fonts/helvetiker_bold.typeface.json', (font) => {
+            // PERBAIKAN: Menurunkan height agar partikel lebih padat dalam satu lapisan,bevelEnabled: false untuk outline yang tajam
+            const textGeo = new TextGeometry('HALO WINDA', { font: font, size: 0.6, height: 0.05, curveSegments: 20, bevelEnabled: false });
+            textGeo.center();
+            const pts = textGeo.attributes.position.array;
+            textTargets = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount; i++) {
+                const pIdx = (i % (pts.length/3)) * 3;
+                // PERBAIKAN: Menghilangkan noise/jitter agar titik-titik kaku di outline huruf
+                textTargets[i*3] = pts[pIdx];
+                textTargets[i*3+1] = pts[pIdx+1];
+                textTargets[i*3+2] = pts[pIdx+2];
+            }
+        });
+
+        // --- MEDIAPIPE ---
+        const video = document.getElementById('input_video');
+        const status = document.getElementById('gesture-status');
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5 });
+        hands.onResults((res) => {
+            if (res.multiHandLandmarks && res.multiHandLandmarks[0]) {
+                const lm = res.multiHandLandmarks[0];
+                handPos.x = (0.5 - lm[9].x) * 12;
+                handPos.y = (0.5 - lm[9].y) * 8;
+
+                const isIndex = lm[8].y < lm[6].y, isMiddle = lm[12].y < lm[10].y;
+                const isPinky = lm[20].y < lm[18].y, isThumb = lm[4].y < lm[3].y;
+
+                let g = 'IDLE';
+                if (isIndex && isPinky && isThumb && !isMiddle) g = 'WINDA';
+                else if (isIndex && isMiddle && !isPinky) g = 'HEART';
+                else if (isThumb && !isIndex) g = 'SPHERE';
+                else if (!isIndex && !isMiddle) g = 'FIST';
+                else if (isIndex && isMiddle) g = 'OPEN';
+
+                currentGesture = g;
+                status.innerText = g === 'IDLE' ? 'MENUNGGU TANGAN...' : (g === 'WINDA' ? 'HALO WINDA!' : g);
+                if (currentGesture !== lastGesture && currentGesture !== 'IDLE') { playSfx(currentGesture); lastGesture = currentGesture; }
+            }
+        });
+
+        const cameraHW = new Camera(video, { onFrame: async () => { await hands.send({image: video}); }, width: 640, height: 480 });
+        cameraHW.start();
+
+        // --- ANIMATION ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const p = points.geometry.attributes.position.array;
+            const time = Date.now() * 0.002;
+
+            for (let i = 0; i < particleCount; i++) {
+                let tx, ty, tz = 0;
+                if (currentGesture === 'HEART') {
+                    const beat = 1 + Math.sin(time * 2) * 0.1;
+                    tx = heartTargets[i*3] * beat + handPos.x;
+                    ty = heartTargets[i*3+1] * beat + handPos.y;
+                } else if (currentGesture === 'SPHERE') {
+                    tx = sphereTargets[i*3] + handPos.x; ty = sphereTargets[i*3+1] + handPos.y; tz = sphereTargets[i*3+2];
+                } else if (currentGesture === 'WINDA' && textTargets) {
+                    tx = textTargets[i*3] + handPos.x; ty = textTargets[i*3+1] + handPos.y; tz = textTargets[i*3+2];
+                } else if (currentGesture === 'FIST') {
+                    tx = handPos.x + (Math.random()-0.5) * 1.5; ty = handPos.y + (Math.random()-0.5) * 1.5;
+                } else if (currentGesture === 'OPEN') {
+                    tx = (Math.random()-0.5) * 25; ty = (Math.random()-0.5) * 25;
+                } else {
+                    tx = p[i*3] + Math.sin(time + i) * 0.01; ty = p[i*3+1] + Math.cos(time + i) * 0.01;
+                }
+
+                // Interpolasi linear untuk gerakan yang halus tapi tegas menuju target
+                p[i*3] += (tx - p[i*3]) * 0.09;
+                p[i*3+1] += (ty - p[i*3+1]) * 0.09;
+                p[i*3+2] += (tz - p[i*3+2]) * 0.09;
+            }
+            points.geometry.attributes.position.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('click', () => audioCtx.resume());
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        animate();
+    </script>
+</body>
+</html>
